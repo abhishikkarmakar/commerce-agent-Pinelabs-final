@@ -23,12 +23,20 @@ interface CustomerInfo {
   email: string
 }
 
+// Returns a consistent HH:MM timestamp safe for both SSR and client
+function getTimestamp(): string {
+  const now = new Date()
+  const h = String(now.getHours()).padStart(2, '0')
+  const m = String(now.getMinutes()).padStart(2, '0')
+  return `${h}:${m}`
+}
+
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'agent',
       content: '🍽️ Hey there! 👋 Welcome to QuickShop!\n\n🛍️ Your AI-powered food ordering buddy is here!\n\nBefore we start, what\'s your name and phone number?\n\nExample: "John, 9876543210"',
-      timestamp: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase()
+      timestamp: '' // Empty on purpose — avoids SSR/client mismatch
     }
   ])
   const [input, setInput] = useState('')
@@ -52,7 +60,7 @@ export default function ChatPage() {
     const userMessage: Message = {
       role: 'customer',
       content: input,
-      timestamp: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase()
+      timestamp: getTimestamp()
     }
 
     setMessages(prev => [...prev, userMessage])
@@ -67,7 +75,7 @@ export default function ChatPage() {
         setMessages(prev => [...prev, {
           role: 'agent',
           content: 'Oops! I need both your name and number 😊\n\nExample: "Rahul, 9876543210"',
-          timestamp: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase()
+          timestamp: getTimestamp()
         }])
         setLoading(false)
         return
@@ -78,7 +86,7 @@ export default function ChatPage() {
       setMessages(prev => [...prev, {
         role: 'agent',
         content: `🎉 Perfect! Great to meet you ${info.name}!\n\nWhat would you like to order today? 😋\n\nExample: "2 classic burgers and 1 coke"`,
-        timestamp: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase()
+        timestamp: getTimestamp()
       }])
       setLoading(false)
       return
@@ -102,7 +110,7 @@ export default function ChatPage() {
       setMessages(prev => [...prev, {
         role: 'agent',
         content: extractData.reply,
-        timestamp: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase()
+        timestamp: getTimestamp()
       }])
 
       // Step 2: Create payment if order found
@@ -125,7 +133,7 @@ export default function ChatPage() {
         setMessages(prev => [...prev, {
           role: 'agent',
           content: payData.reply,
-          timestamp: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase()
+          timestamp: getTimestamp()
         }])
 
         // Show payment button with order summary
@@ -133,7 +141,7 @@ export default function ChatPage() {
           setMessages(prev => [...prev, {
             role: 'agent',
             content: `💳 TAP TO PAY: ${payData.paymentLink}`,
-            timestamp: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase(),
+            timestamp: getTimestamp(),
             paymentLink: payData.paymentLink,
             orderItems: extractData.orderItems,
             orderTotal: extractData.total
@@ -145,7 +153,7 @@ export default function ChatPage() {
       setMessages(prev => [...prev, {
         role: 'agent',
         content: '😅 Oops! Something hiccupped. No worries - please try again! We\'re here to help 🚀',
-        timestamp: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase()
+        timestamp: getTimestamp()
       }])
     }
 
@@ -237,9 +245,12 @@ export default function ChatPage() {
                     })}
                   </p>
                 )}
-                <p className={`text-xs mt-1 ${msg.role === 'customer' ? 'text-green-200' : 'text-gray-600'}`}>
-                  {msg.timestamp}
-                </p>
+                {/* Only render timestamp if it exists — initial SSR message has none */}
+                {msg.timestamp && (
+                  <p className={`text-xs mt-1 ${msg.role === 'customer' ? 'text-green-200' : 'text-gray-600'}`}>
+                    {msg.timestamp}
+                  </p>
+                )}
               </div>
             </div>
           ))}
