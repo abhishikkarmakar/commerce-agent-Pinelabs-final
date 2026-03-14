@@ -283,6 +283,29 @@ export async function POST(req: NextRequest) {
     const allProducts = await fetchProducts()
     console.log('📦 Products loaded:', allProducts.length)
 
+    const lowerMsg = message.toLowerCase().trim()
+    const menuDisplay = allProducts
+      .map(p => `${p.emoji} ${p.name} — ₹${toRupees(p.base_price_paisa)}`)
+      .join('\n')
+
+    // ── Menu Guard Rail ──────────────────────────────────────────────────────
+    const menuKeywords = [
+      'what you have', 'what do you have', 'what\'s available', 'whats available',
+      'show menu', 'show me menu', 'menu', 'what can i order', 'what can i get',
+      'what are the options', 'options', 'available', 'list', 'items',
+      'what all', 'tell me', 'show me', 'what you got', 'whatcha got',
+      'what orders you have', 'what orders', 'products', 'available items',
+      'what food', 'list of items', 'show products'
+    ]
+    const isMenuRequest = menuKeywords.some(k => lowerMsg.includes(k))
+
+    if (isMenuRequest) {
+      return NextResponse.json({
+        success: false,
+        reply: `Sure! Here's what we have 😋\n\n${menuDisplay}\n\nJust tell me what you'd like! Example: "2 classic burgers and 1 coke" 🛍️`
+      })
+    }
+
     // Step 1: Extract items via GPT
     let parsedItems: ParsedItem[] = []
     try {
@@ -300,7 +323,6 @@ export async function POST(req: NextRequest) {
 
     if (!parsedItems.length) {
       // Check if it's an ambiguous category like "pizza" or "burger"
-      const lowerMsg = message.toLowerCase().trim()
       const categoryMatches = allProducts.filter(p =>
         p.name.toLowerCase().includes(lowerMsg) ||
         lowerMsg.includes(p.name.toLowerCase().split(' ')[0])
@@ -319,24 +341,9 @@ export async function POST(req: NextRequest) {
         })
       }
 
-      const menuDisplay = allProducts
-        .map(p => `${p.emoji} ${p.name} — ₹${toRupees(p.base_price_paisa)}`)
-        .join('\n')
-
-      // Check if user is asking about the menu
-      const menuKeywords = [
-        'what you have', 'what do you have', 'what\'s available', 'whats available',
-        'show menu', 'show me menu', 'menu', 'what can i order', 'what can i get',
-        'what are the options', 'options', 'available', 'list', 'items',
-        'what all', 'tell me', 'show me', 'what you got', 'whatcha got'
-      ]
-      const isMenuRequest = menuKeywords.some(k => lowerMsg.includes(k))
-
       return NextResponse.json({
         success: false,
-        reply: isMenuRequest
-          ? `Sure! Here's what we have 😋\n\n${menuDisplay}\n\nJust tell me what you'd like! Example: "2 classic burgers and 1 coke" 🛍️`
-          : `Hmm, I didn't quite catch that! 👂\n\n✨ Here's what we've got:\n\n${menuDisplay}\n\nFeel free to order any combo! Example: "1 cheese burger, 2 fries, 1 coke" 🤤`
+        reply: `Hmm, I didn't quite catch that! 👂\n\n✨ Here's what we've got:\n\n${menuDisplay}\n\nFeel free to order any combo! Example: "1 cheese burger, 2 fries, 1 coke" 🤤`
       })
     }
 
@@ -348,44 +355,53 @@ export async function POST(req: NextRequest) {
       console.log('🔍 Processing:', parsed.raw_name)
 
       let bestMatch: PineconeMatch | null = null
+      const lowerRaw = parsed.raw_name.toLowerCase().trim()
 
-      // Try Pinecone semantic search
-      try {
-        const vector = await embed(parsed.raw_name)
-        const matches = await searchPinecone(vector)
-        console.log('📍 Pinecone matches:', matches.map(m => `${m.metadata.name}(${m.score.toFixed(2)})`))
+      // ── Priority 1: Direct/Direct-ish Match ──
+      // This catches "coke" -> "Coke 500ml" immediately
+      const directMatch = allProducts.find(p => {
+        const lowerName = p.name.toLowerCase()
+        return lowerName === lowerRaw ||
+          lowerName.includes(lowerRaw) ||
+          lowerRaw.includes(lowerName.split(' ')[0])
+      })
 
-        if (matches[0]?.score >= SIMILARITY_THRESHOLD) {
-          bestMatch = matches[0]
-        } else if (matches.length > 0) {
-          // Weak match — suggest alternatives
-          const alts = matches
-            .slice(0, 3)
-            .map(m => `${m.metadata.emoji} ${m.metadata.name}`)
-            .join(', ')
-          suggestions.push(`"${parsed.raw_name}" not found — did you mean: ${alts}?`)
-          continue
+      if (directMatch) {
+        console.log('✅ Direct match found:', directMatch.name)
+        bestMatch = {
+          id: directMatch.id,
+          score: 1.0,
+          metadata: {
+            name: directMatch.name,
+            base_price_paisa: directMatch.base_price_paisa,
+            emoji: directMatch.emoji
+          }
         }
-      } catch {
-        console.warn('⚠️ Pinecone failed, falling back to direct match')
       }
 
-      // Fallback: direct name match from Supabase products
+      // ── Priority 2: Semantic Search (Pinecone) ──
       if (!bestMatch) {
-        const directMatch = allProducts.find(p =>
-          p.name.toLowerCase().includes(parsed.raw_name.toLowerCase()) ||
-          parsed.raw_name.toLowerCase().includes(p.name.toLowerCase().split(' ')[0])
-        )
-        if (directMatch) {
-          bestMatch = {
-            id: directMatch.id,
-            score: 1.0,
-            metadata: {
-              name: directMatch.name,
-              base_price_paisa: directMatch.base_price_paisa,
-              emoji: directMatch.emoji
-            }
+        try {
+          const vector = await embed(parsed.raw_name)
+          const matches = await searchPinecone(vector)
+
+          // Filter out extreme noise (anything below 0.20 is usually irrelevant)
+          const validMatches = matches.filter(m => m.score >= 0.20)
+          console.log('📍 Valid Pinecone matches:', validMatches.map(m => `${m.metadata.name}(${m.score.toFixed(2)})`))
+
+          if (validMatches[0]?.score >= SIMILARITY_THRESHOLD) {
+            bestMatch = validMatches[0]
+          } else if (validMatches.length > 0) {
+            // Weak match — suggest alternatives
+            const alts = validMatches
+              .slice(0, 3)
+              .map(m => `${m.metadata.emoji} ${m.metadata.name}`)
+              .join(', ')
+            suggestions.push(`"${parsed.raw_name}" not found — did you mean: ${alts}?`)
+            continue
           }
+        } catch {
+          console.warn('⚠️ Semantic search failed')
         }
       }
 
